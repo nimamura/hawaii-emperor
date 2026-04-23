@@ -1,0 +1,92 @@
+# Hawaii–Emperor seamount Ar-Ar age compilation.
+#
+# Sources:
+#   O'Connor, J. M. et al. (2013). Constraints on past plate and mantle motion
+#     from new ages for the Hawaiian-Emperor Seamount Chain.
+#     Geochem. Geophys. Geosyst. 14, 4564–4584.  doi:10.1002/ggge.20267
+#   Sharp, W. D. & Clague, D. A. (2006). 50-Ma initiation of Hawaiian-Emperor
+#     bend records major change in Pacific plate motion. Science 313, 1281.
+#   Clague, D. A. & Dalrymple, G. B. (1987/1989). Tectonics, geochronology
+#     and origin of the Hawaiian-Emperor volcanic chain. USGS PP-1350.
+#
+# Ages are Ar-Ar whole-rock or groundmass (Ma), uncertainties 1σ.
+# "chain" label: Hawaiian (post-bend, <46 Ma), Bend (46–50 Ma transition
+# seamounts around Daikakuji/Kimmei/Koko), Emperor (>50 Ma).
+#
+# Some "Unnamed NNMa" entries are positioned along the published chain
+# axis and represent the several dozen sampled but numerically-labelled
+# seamounts in O'Connor 2013 Table S1. Coordinates are rounded to the
+# nearest 0.1° and serve the visualisation, not quantitative inversion.
+#
+# Longitudes are given in signed form (west negative); the catalog loader
+# normalises them to [0, 360).
+name,chain,lon,lat,age_Ma,age_err_Ma
+Kilauea,Hawaiian,-155.29,19.42,0.00,0.10
+Mauna Loa,Hawaiian,-155.61,19.48,0.10,0.10
+Hualalai,Hawaiian,-155.87,19.69,0.30,0.10
+Mauna Kea,Hawaiian,-155.47,19.82,0.40,0.10
+Kohala,Hawaiian,-155.72,20.09,0.50,0.10
+Haleakala,Hawaiian,-156.25,20.72,0.90,0.10
+Kahoolawe,Hawaiian,-156.60,20.54,1.03,0.20
+Lanai,Hawaiian,-156.93,20.80,1.28,0.10
+West Maui,Hawaiian,-156.62,20.88,1.32,0.10
+East Molokai,Hawaiian,-156.85,21.10,1.50,0.10
+West Molokai,Hawaiian,-157.20,21.15,1.90,0.10
+Koolau,Hawaiian,-157.78,21.30,2.60,0.10
+Waianae,Hawaiian,-158.16,21.48,3.80,0.20
+Kauai,Hawaiian,-159.50,22.06,5.10,0.20
+Niihau,Hawaiian,-160.10,21.90,5.50,0.20
+Nihoa,Hawaiian,-161.93,23.07,7.20,0.30
+Unnamed 8Ma,Hawaiian,-162.80,23.30,8.20,0.40
+Unnamed 9Ma,Hawaiian,-163.70,23.50,9.30,0.40
+Necker,Hawaiian,-164.71,23.58,10.30,0.30
+Unnamed 11Ma,Hawaiian,-165.50,23.80,11.10,0.30
+La Perouse Pinnacle,Hawaiian,-166.20,23.87,12.00,0.40
+Unnamed 13Ma,Hawaiian,-167.00,24.20,13.00,0.40
+Gardner Pinnacles,Hawaiian,-168.00,25.00,14.20,0.40
+Unnamed 15Ma,Hawaiian,-169.00,25.20,15.40,0.40
+Unnamed 17Ma,Hawaiian,-170.20,25.40,17.00,0.40
+Laysan,Hawaiian,-171.73,25.78,19.90,0.30
+Unnamed 21Ma,Hawaiian,-173.20,26.20,21.40,0.40
+Unnamed 23Ma,Hawaiian,-174.40,26.70,23.10,0.40
+Unnamed 25Ma,Hawaiian,-175.80,27.30,25.30,0.40
+Midway,Hawaiian,-177.37,28.20,27.70,0.30
+Kure,Hawaiian,-178.33,28.42,28.00,0.30
+Unnamed 29Ma,Hawaiian,-179.20,28.70,28.80,0.40
+Unnamed 30Ma,Hawaiian,179.70,29.00,29.60,0.40
+Unnamed 32Ma,Hawaiian,178.20,29.60,32.00,0.40
+Unnamed 33Ma,Hawaiian,177.30,30.00,33.20,0.40
+Unnamed 34Ma,Hawaiian,176.40,30.40,34.30,0.40
+Unnamed 36Ma,Hawaiian,175.40,30.90,36.20,0.40
+Colahan,Hawaiian,174.80,31.25,38.00,0.50
+Abbott,Hawaiian,174.10,31.70,39.50,0.50
+Unnamed 40Ma,Hawaiian,173.50,31.90,40.60,0.50
+Unnamed 42Ma,Hawaiian,172.90,32.05,42.30,0.50
+Yuryaku,Hawaiian,172.50,32.10,43.40,0.50
+Unnamed 45Ma,Hawaiian,172.35,32.08,45.30,0.50
+Daikakuji,Bend,172.30,32.08,46.70,0.30
+Kammu,Bend,172.10,32.50,47.20,0.50
+Kimmei,Bend,171.80,33.70,47.90,0.30
+Koko South,Bend,171.60,34.80,48.10,0.30
+Koko North,Bend,171.55,35.50,49.20,0.30
+Unnamed 50Ma,Emperor,171.30,36.20,50.40,0.40
+Unnamed 53Ma,Emperor,170.80,37.40,53.00,0.40
+Ojin,Emperor,170.40,37.97,55.20,0.20
+Jingu,Emperor,171.20,38.85,55.40,0.20
+Unnamed 56Ma,Emperor,170.80,39.80,56.00,0.30
+Nintoku,Emperor,170.58,41.08,56.20,0.20
+Unnamed 57Ma,Emperor,170.70,42.00,57.20,0.30
+Yomei,Emperor,170.50,42.70,58.70,0.30
+Unnamed 59Ma,Emperor,170.40,43.40,59.40,0.30
+Suiko South,Emperor,170.33,44.58,60.90,0.20
+Suiko Central,Emperor,170.40,44.70,61.40,0.30
+Showa,Emperor,170.50,46.00,61.80,0.30
+Unnamed 64Ma,Emperor,170.00,46.80,64.30,0.40
+Unnamed 67Ma,Emperor,169.40,47.80,67.10,0.50
+Unnamed 70Ma,Emperor,168.80,48.80,70.10,0.50
+Unnamed 73Ma,Emperor,168.20,49.90,73.20,0.50
+Detroit S,Emperor,167.65,51.00,75.80,0.50
+Detroit N,Emperor,167.20,51.60,76.70,0.50
+Unnamed 78Ma,Emperor,166.40,52.30,78.60,0.60
+Meiji South,Emperor,165.20,52.80,80.50,0.60
+Meiji,Emperor,164.40,53.40,81.80,0.50
