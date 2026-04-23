@@ -1,30 +1,31 @@
 """2×2 Hawaii–Emperor bend figure.
 
 Layout:
-  A  map of the North Pacific with seamounts coloured by age and a
-     great-circle bend marker at Daikakuji.
+  A  map of the North Pacific with ETOPO 2022 bathymetry as backdrop,
+     seamounts coloured by age, plate-motion arrows for each segment,
+     and the 47 Ma bend starred at Daikakuji.
   B  age (Ma) vs along-chain distance from Kilauea (km). Two OLS lines
      are fit independently to Hawaiian+Bend and Emperor seamounts; the
      published ~47 Ma bend age is drawn as a vertical reference.
-  C  chain azimuth (°) as a function of age, computed from a sliding
-     window of consecutive seamounts in age order. The 47 Ma step is
-     the core of the story.
-  D  apparent plate speed (cm/yr) along the chain, from a running slope
-     of distance vs age. Noisier than B/C but makes the point that the
-     speed is broadly comparable on both sides of the bend.
+  C  chain azimuth (°) as a function of age. The 47 Ma step from
+     ~300° (WNW) to ~350° (~N) is the core of the story.
+  D  apparent plate speed (cm/yr). Smoothed sliding-window slope of
+     distance vs age, with a noisier raw derivative in the background.
 
-Plain matplotlib only — no cartopy. The geographical domain is narrow
-enough (roughly 150°E–210°E, 15°N–60°N) that a rectangular PlateCarrée
-rendering with a hand-drawn Pacific rim reads cleanly for an X-post
-audience.
+Japanese subtitles on each panel are there so a non-specialist reader
+can parse the figure without reading any body text.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap, LightSource
+from matplotlib.patches import FancyArrowPatch
 
 from src.geometry import (
     BEND_LAT,
@@ -37,7 +38,18 @@ from src.geometry import (
     great_circle_distance_km,
 )
 
-# Labels to annotate in the map panel. (name, corner of label relative to point).
+# Use a Japanese-capable sans-serif if it's installed (Hiragino Sans on macOS).
+# Falls back silently to DejaVu Sans so tests still run on CI.
+_PREFERRED_JP_FONTS = ["Hiragino Sans", "Hiragino Maru Gothic Pro", "YuGothic", "Noto Sans CJK JP"]
+mpl.rcParams["font.sans-serif"] = _PREFERRED_JP_FONTS + list(mpl.rcParams["font.sans-serif"])
+mpl.rcParams["axes.unicode_minus"] = False
+
+# Default path for the pre-cropped ETOPO 2022 tile. Created by
+# ``scripts/prepare_etopo_crop.py``. If missing, the map panel falls back
+# to a coastline-only rendering.
+DEFAULT_ETOPO_PATH = Path(__file__).resolve().parent.parent / "data" / "etopo_north_pacific.npz"
+
+# Labels to annotate on the map. (seamount_name, anchor_corner).
 MAP_LABELS: list[tuple[str, str]] = [
     ("Kilauea", "tr"),
     ("Midway", "tr"),
@@ -45,31 +57,28 @@ MAP_LABELS: list[tuple[str, str]] = [
     ("Meiji", "tr"),
 ]
 
-# Approximate Pacific-rim coastline polyline (sparse, hand-traced) for
-# the map panel. Longitudes are in [140, 240] (east-positive, crossing the
-# dateline), latitudes in degrees north.
-_RIM = np.array(
-    [
-        # Japan / Kuril / Kamchatka
-        (140.0, 35.0), (141.0, 39.0), (141.5, 41.5), (143.0, 43.5),
-        (146.0, 45.0), (150.0, 46.5), (153.0, 49.0), (156.0, 51.0),
-        (159.0, 53.0), (162.0, 54.5), (165.0, 56.0), (168.0, 57.5),
-        (172.0, 59.0),
-        # Aleutians
-        (180.0, 53.0), (190.0, 52.5), (200.0, 54.0), (210.0, 56.0),
-        (215.0, 58.0),
+
+# ---------- bathymetry colour map ------------------------------------------
+
+def _bathymetry_cmap() -> LinearSegmentedColormap:
+    """Ocean-biased GMT-style colour ramp from deep blue → tan land."""
+    # Breakpoints chosen for North Pacific seamount topography. Values are
+    # ``(normalised_elevation ∈ [0, 1], colour)`` with 0 = -9000 m and
+    # 1 = +4000 m, so sea level sits at ~0.69.
+    stops = [
+        (0.00, "#0b1e3a"),  # trench / abyssal floor
+        (0.18, "#102c52"),
+        (0.35, "#1a4576"),
+        (0.55, "#3b78b0"),  # mid-ocean ridges
+        (0.69, "#b7dff5"),  # shelf / sea level
+        (0.70, "#f1e9cf"),  # coastal
+        (0.80, "#c2b488"),
+        (1.00, "#7a6948"),  # mountains
     ]
-)
+    return LinearSegmentedColormap.from_list("hawaii_bathy", stops, N=512)
 
 
-def _draw_pacific_rim(ax: plt.Axes) -> None:
-    # Close the polygon into the top-left so the land fill sits cleanly in
-    # the NW corner of the map without bleeding into the open ocean.
-    poly_lon = np.concatenate([_RIM[:, 0], [_RIM[-1, 0], _RIM[0, 0]]])
-    poly_lat = np.concatenate([_RIM[:, 1], [65.0, 65.0]])
-    ax.fill(poly_lon, poly_lat, color="#f1ede2", edgecolor="#b7b0a0",
-            linewidth=0.7, zorder=1)
-
+# ---------- small numerical helpers ----------------------------------------
 
 def _fit_segment(ages: np.ndarray, dists: np.ndarray) -> tuple[float, float]:
     """OLS slope and intercept of ``dists = a + s * ages``."""
@@ -85,14 +94,9 @@ def _running_azimuth(
     ages_Ma: np.ndarray,
     lats: np.ndarray,
     lons: np.ndarray,
-    age_window_Myr: float = 10.0,
+    age_window_Myr: float = 12.0,
 ) -> np.ndarray:
-    """Bearing averaged over seamounts within ±``age_window_Myr`` of each point.
-
-    Using an age-window (rather than a fixed index window) keeps the
-    azimuth estimate stable in the densely-sampled young end of the chain
-    where many Big-Island-scale points sit at almost identical ages.
-    """
+    """Bearing averaged over seamounts within ±``age_window_Myr`` of each point."""
     n = ages_Ma.size
     az = np.full(n, np.nan)
     for i in range(n):
@@ -111,21 +115,14 @@ def _running_azimuth(
 def _smoothed_speed_cm_per_yr(
     ages_Ma: np.ndarray,
     dists_km: np.ndarray,
-    age_window_Myr: float = 10.0,
+    age_window_Myr: float = 12.0,
 ) -> np.ndarray:
-    """Apparent speed from a sliding-window linear fit of dist vs age.
-
-    The direct numerical derivative in ``apparent_speed_cm_per_yr`` is
-    dominated by tiny age gaps between volcanoes on the same island (e.g.
-    Kilauea/Mauna Loa/Hualalai). Fitting a line in a ±5 Myr window averages
-    that scatter out.
-    """
+    """Apparent speed from a sliding-window linear fit of dist vs age."""
     n = ages_Ma.size
     out = np.full(n, np.nan)
     for i in range(n):
         mask = np.abs(ages_Ma - ages_Ma[i]) <= age_window_Myr / 2
         if mask.sum() < 3:
-            # Fall back to nearest-neighbours when the window is sparse.
             k = 3
             lo = max(0, i - k)
             hi = min(n, i + k + 1)
@@ -139,12 +136,16 @@ def _smoothed_speed_cm_per_yr(
     return out
 
 
+# ---------- figure entry point ----------------------------------------------
+
 def plot_hawaii_emperor_figure(
     df: pd.DataFrame,
     *,
     bend_age_Ma: float = 47.0,
     cmap: str = "plasma",
+    etopo_path: Path | None = None,
     title: str | None = (
+        "ハワイ–皇帝海山列：47 Ma に太平洋プレートが進路を 60° 変えた瞬間の化石\n"
         "Hawaii–Emperor Bend — the 47 Ma kink in a 6000 km hotspot track"
     ),
 ) -> plt.Figure:
@@ -162,11 +163,12 @@ def plot_hawaii_emperor_figure(
 
     dist_km = chain_distance_via_bend_km(lats, lons, chain=chains)
 
-    fig = plt.figure(figsize=(13.0, 10.0), facecolor="white")
+    fig = plt.figure(figsize=(14.5, 10.5), facecolor="white")
     gs = fig.add_gridspec(
         nrows=2, ncols=2,
-        left=0.06, right=0.97, top=0.93, bottom=0.07,
-        wspace=0.24, hspace=0.32,
+        left=0.055, right=0.97, top=0.90, bottom=0.075,
+        wspace=0.22, hspace=0.42,
+        width_ratios=[1.25, 1.0],
     )
 
     ax_map = fig.add_subplot(gs[0, 0], label="A")
@@ -177,26 +179,34 @@ def plot_hawaii_emperor_figure(
     vmin = 0.0
     vmax = float(np.ceil(ages.max() / 10) * 10)
 
-    _draw_panel_map(ax_map, df, vmin=vmin, vmax=vmax, cmap=cmap)
+    if etopo_path is None:
+        etopo_path = DEFAULT_ETOPO_PATH
+
+    _draw_panel_map(
+        ax_map, df, vmin=vmin, vmax=vmax, cmap=cmap,
+        bend_age_Ma=bend_age_Ma, etopo_path=etopo_path,
+    )
     _draw_panel_distance(ax_dist, ages, dist_km, chains, bend_age_Ma, cmap=cmap, vmax=vmax)
     _draw_panel_azimuth(ax_azi, ages, lats, lons, bend_age_Ma)
     _draw_panel_speed(ax_vel, ages, dist_km, bend_age_Ma)
 
-    for ax, letter, loc in [
-        (ax_map, "A", "tl"),
-        (ax_dist, "B", "tl"),
-        (ax_azi, "C", "tl"),
-        (ax_vel, "D", "tl"),
-    ]:
-        _panel_tag(ax, letter, loc)
+    for ax, letter in [(ax_map, "A"), (ax_dist, "B"), (ax_azi, "C"), (ax_vel, "D")]:
+        _panel_tag(ax, letter)
 
     if title is not None:
-        fig.suptitle(title, fontsize=14, y=0.985)
+        fig.suptitle(title, fontsize=13.5, y=0.975)
 
     return fig
 
 
-# ---- individual panels ------------------------------------------------------
+# ---------- map (panel A) ---------------------------------------------------
+
+def _load_etopo(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Return ``(lon, lat, z)`` or ``None`` if the cached tile is missing."""
+    if not path.exists():
+        return None
+    with np.load(path) as npz:
+        return npz["lon"].copy(), npz["lat"].copy(), npz["z"].copy()
 
 
 def _draw_panel_map(
@@ -206,54 +216,102 @@ def _draw_panel_map(
     vmin: float,
     vmax: float,
     cmap: str,
+    bend_age_Ma: float,
+    etopo_path: Path,
 ) -> None:
     ages = df["age_Ma"].to_numpy()
     lons = df["lon"].to_numpy()
     lats = df["lat"].to_numpy()
 
-    ax.set_facecolor("#f6f8fc")
     ax.set_xlim(142.0, 215.0)
     ax.set_ylim(15.0, 60.0)
 
-    _draw_pacific_rim(ax)
+    bathy = _load_etopo(etopo_path)
+    if bathy is not None:
+        bathy_lon, bathy_lat, z = bathy
+        # Normalise to [0, 1] with sea level at the land/sea break.
+        z_vmin, z_vmax = -9000.0, 4000.0
+        norm_z = np.clip((z - z_vmin) / (z_vmax - z_vmin), 0.0, 1.0)
 
-    # Great-circle from Kilauea to bend to Meiji-ish (reference polyline).
-    ref_lons = np.concatenate(
-        [
-            _gc_sample(KILAUEA_LAT, KILAUEA_LON, BEND_LAT, BEND_LON, n=40)[1],
-            _gc_sample(BEND_LAT, BEND_LON, 53.4, 164.4, n=40)[1],
-        ]
-    )
-    ref_lats = np.concatenate(
-        [
-            _gc_sample(KILAUEA_LAT, KILAUEA_LON, BEND_LAT, BEND_LON, n=40)[0],
-            _gc_sample(BEND_LAT, BEND_LON, 53.4, 164.4, n=40)[0],
-        ]
-    )
-    ax.plot(ref_lons, ref_lats, color="#bbb", lw=1.0, ls="--", zorder=1)
+        # Add a hillshade so the seafloor texture reads as 3-D. The
+        # vertical exaggeration is tuned so seamounts "pop" off the
+        # abyssal plain without the Kuril Trench over-saturating.
+        ls = LightSource(azdeg=315, altdeg=40)
+        shaded = ls.shade(
+            norm_z, cmap=_bathymetry_cmap(),
+            blend_mode="overlay", vert_exag=90, fraction=1.0,
+        )
+        ax.imshow(
+            shaded,
+            extent=[bathy_lon.min(), bathy_lon.max(), bathy_lat.min(), bathy_lat.max()],
+            origin="lower",
+            zorder=0,
+            interpolation="bilinear",
+        )
+    else:
+        ax.set_facecolor("#e8eef8")
 
+    # Great-circle reference line through the bend (faint guide).
+    ref_lats_a, ref_lons_a = _gc_sample(KILAUEA_LAT, KILAUEA_LON, BEND_LAT, BEND_LON, n=60)
+    ref_lats_b, ref_lons_b = _gc_sample(BEND_LAT, BEND_LON, 53.4, 164.4, n=60)
+    ax.plot(ref_lons_a, ref_lats_a, color="white", lw=1.6, alpha=0.6, zorder=2)
+    ax.plot(ref_lons_b, ref_lats_b, color="white", lw=1.6, alpha=0.6, zorder=2)
+
+    # Seamount points, coloured by age.
     sc = ax.scatter(
         lons, lats, c=ages, cmap=cmap, vmin=vmin, vmax=vmax,
-        s=28, edgecolor="white", linewidth=0.5, zorder=3,
+        s=40, edgecolor="white", linewidth=0.7, zorder=4,
     )
 
     # Bend marker.
     ax.plot(
         [BEND_LON], [BEND_LAT],
-        marker="*", ms=16, color="#cc3344", mec="white", mew=1.0, zorder=4,
+        marker="*", ms=20, color="#ffd44b", mec="#7a3a00", mew=1.2, zorder=5,
     )
     ax.annotate(
-        "47 Ma bend (Daikakuji)",
+        f"{bend_age_Ma:.0f} Ma bend\n(Daikakuji)",
         xy=(BEND_LON, BEND_LAT),
-        xytext=(-10, -20),
+        xytext=(-12, -26),
         textcoords="offset points",
         fontsize=10,
-        color="#cc3344",
+        color="#ffe27a",
         fontweight="bold",
         ha="right",
+        bbox={"facecolor": "#3a1a00", "edgecolor": "none", "pad": 3.0, "alpha": 0.75},
     )
 
-    # A handful of named seamounts.
+    # Plate-motion arrows, offset into open ocean so they don't cover
+    # the chain itself. Each arrow points in the direction the Pacific
+    # plate was moving during that era (the direction in which young
+    # volcanoes "age away" along the chain).
+    _plate_arrow(
+        ax,
+        start=(208.0, 17.0),
+        end=(192.0, 21.0),
+        color="#ffffff",
+        label="47 Ma→現在\nプレートは WNW へ\n~8 cm/yr",
+        label_offset=(0.0, -3.5),
+    )
+    _plate_arrow(
+        ax,
+        start=(150.5, 35.0),
+        end=(150.5, 50.5),
+        color="#ffffff",
+        label="82 → 47 Ma\nプレートは北へ\n~6 cm/yr",
+        label_offset=(2.5, 0.0),
+        label_anchor="left",
+    )
+
+    # Small legend in the top-right corner.
+    ax.text(
+        0.988, 0.015,
+        "→ は古代のプレート進行方向\narrows: past plate motion",
+        transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5,
+        color="white",
+        bbox={"facecolor": "#222222", "edgecolor": "none", "pad": 3.0, "alpha": 0.8},
+    )
+
+    # Named seamounts.
     for name, anchor in MAP_LABELS:
         match = df[df["name"] == name]
         if match.empty:
@@ -268,16 +326,62 @@ def _draw_panel_map(
             fontsize=9,
             ha=ha,
             va=va,
-            color="#333",
+            color="white",
+            path_effects=[],
+            bbox={"facecolor": "#000000", "edgecolor": "none", "pad": 1.8, "alpha": 0.55},
         )
 
-    ax.set_xlabel("longitude (°E)")
-    ax.set_ylabel("latitude (°N)")
-    ax.grid(True, color="#dddddd", lw=0.5)
+    ax.set_xlabel("経度 longitude (°E)")
+    ax.set_ylabel("緯度 latitude (°N)")
+    ax.set_title("北太平洋の海底地形と海山の年代 (ETOPO 2022 bathymetry)",
+                 fontsize=11, pad=5)
+    ax.grid(True, color="white", lw=0.3, alpha=0.20)
 
-    cbar = ax.figure.colorbar(sc, ax=ax, pad=0.02, fraction=0.045)
-    cbar.set_label("seamount age (Ma)")
+    # Slim colorbar so it doesn't eat into the map area.
+    cbar = ax.figure.colorbar(sc, ax=ax, pad=0.015, fraction=0.032, aspect=28)
+    cbar.set_label("海山の年代 age (Ma)", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
 
+
+def _plate_arrow(
+    ax: plt.Axes,
+    *,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    color: str,
+    label: str | None = None,
+    label_offset: tuple[float, float] = (0.0, 0.0),
+    label_anchor: Literal["center", "left", "right"] = "center",
+) -> None:
+    # Halo first (bigger, darker) so the white arrow pops against any background.
+    halo = FancyArrowPatch(
+        start, end,
+        arrowstyle="-|>", mutation_scale=30,
+        color="#1a1a1a", lw=6.0, zorder=5.5, alpha=0.7,
+    )
+    ax.add_patch(halo)
+    arrow = FancyArrowPatch(
+        start, end,
+        arrowstyle="-|>", mutation_scale=26,
+        color=color, lw=3.2, zorder=6,
+    )
+    ax.add_patch(arrow)
+
+    if label is not None:
+        lon = (start[0] + end[0]) / 2 + label_offset[0]
+        lat = (start[1] + end[1]) / 2 + label_offset[1]
+        ha = {"center": "center", "left": "left", "right": "right"}[label_anchor]
+        ax.text(
+            lon, lat, label,
+            color="white", fontsize=9.5, ha=ha, va="center",
+            fontweight="bold",
+            bbox={"facecolor": "#1a1a1a", "edgecolor": "none",
+                  "pad": 3.5, "alpha": 0.82},
+            zorder=7,
+        )
+
+
+# ---------- age-distance (panel B) -----------------------------------------
 
 def _draw_panel_distance(
     ax: plt.Axes,
@@ -291,7 +395,7 @@ def _draw_panel_distance(
 ) -> None:
     ax.scatter(
         ages, dists_km, c=ages, cmap=cmap, vmin=0.0, vmax=vmax,
-        s=30, edgecolor="white", linewidth=0.5, zorder=3,
+        s=34, edgecolor="white", linewidth=0.5, zorder=3,
     )
 
     haw_mask = np.isin(chains, ["Hawaiian", "Bend"])
@@ -299,26 +403,43 @@ def _draw_panel_distance(
 
     if haw_mask.any():
         s_h, a_h = _fit_segment(ages[haw_mask], dists_km[haw_mask])
-        x = np.linspace(0.0, max(ages[haw_mask].max(), bend_age_Ma), 50)
-        ax.plot(x, a_h + s_h * x, color="#2c6fb0", lw=2.0, label=f"Hawaiian: {s_h*0.1:.1f} cm/yr")
+        x = np.linspace(0.0, bend_age_Ma, 50)
+        ax.plot(x, a_h + s_h * x, color="#2c6fb0", lw=2.2,
+                label=f"Hawaiian chain: {s_h*0.1:.1f} cm/yr")
     if emp_mask.any():
         s_e, a_e = _fit_segment(ages[emp_mask], dists_km[emp_mask])
         x = np.linspace(bend_age_Ma, ages.max(), 50)
-        ax.plot(x, a_e + s_e * x, color="#b01a3a", lw=2.0, label=f"Emperor: {s_e*0.1:.1f} cm/yr")
+        ax.plot(x, a_e + s_e * x, color="#b01a3a", lw=2.2,
+                label=f"Emperor chain: {s_e*0.1:.1f} cm/yr")
 
-    ax.axvline(bend_age_Ma, color="#888", ls=":", lw=1.0)
-    ax.text(
-        bend_age_Ma + 0.8, ax.get_ylim()[1] * 0.05,
-        f"{bend_age_Ma:.0f} Ma", color="#666", fontsize=9, va="bottom",
+    ax.axvline(bend_age_Ma, color="#cc3344", ls="--", lw=1.2, alpha=0.7, zorder=2)
+
+    # Arrow highlighting the kink.
+    ymax = dists_km.max() * 1.07
+    ax.annotate(
+        "ここで折れ曲がる\n(the kink)",
+        xy=(bend_age_Ma, 3500),
+        xytext=(bend_age_Ma + 15, 1800),
+        textcoords="data",
+        fontsize=10, color="#cc3344", fontweight="bold",
+        ha="left", va="center",
+        arrowprops={"arrowstyle": "->", "color": "#cc3344", "lw": 1.4},
     )
 
-    ax.set_xlabel("age (Ma)")
-    ax.set_ylabel("along-chain distance from Kilauea (km)")
+    ax.set_xlabel("年代 age (Ma)")
+    ax.set_ylabel("Kilaueaからの距離 along-chain distance (km)")
+    ax.set_title("海山の年代 vs 距離   Age vs along-chain distance",
+                 fontsize=10.5, pad=5)
     ax.set_xlim(-2, ages.max() * 1.04)
-    ax.set_ylim(0, dists_km.max() * 1.07)
+    ax.set_ylim(0, ymax)
     ax.grid(True, color="#dddddd", lw=0.5)
     ax.legend(loc="upper left", frameon=False, fontsize=9)
 
+    ax.text(bend_age_Ma + 0.8, 150, f"{bend_age_Ma:.0f} Ma",
+            color="#cc3344", fontsize=9, va="bottom")
+
+
+# ---------- azimuth (panel C) ----------------------------------------------
 
 def _draw_panel_azimuth(
     ax: plt.Axes,
@@ -328,24 +449,43 @@ def _draw_panel_azimuth(
     bend_age_Ma: float,
 ) -> None:
     az = _running_azimuth(ages, lats, lons, age_window_Myr=12.0)
-    ax.plot(ages, az, marker="o", ms=4, lw=1.2, color="#333")
+    ax.plot(ages, az, marker="o", ms=4, lw=1.4, color="#222")
 
-    ax.axvline(bend_age_Ma, color="#888", ls=":", lw=1.0)
-    ax.axhspan(285, 310, color="#2c6fb0", alpha=0.14, zorder=0)
-    ax.axhspan(340, 360, color="#b01a3a", alpha=0.14, zorder=0)
+    ax.axvline(bend_age_Ma, color="#cc3344", ls="--", lw=1.2, alpha=0.7)
 
-    ax.text(5.0, 303, "Hawaiian chain\nWNW (~300°)", color="#2c6fb0", fontsize=9)
-    ax.text(70.0, 353, "Emperor chain\n~N (~350°)", color="#b01a3a",
-            fontsize=9, ha="center")
-    ax.text(bend_age_Ma + 0.8, 270, f"{bend_age_Ma:.0f} Ma",
-            color="#666", fontsize=9, va="bottom")
+    ax.axhspan(285, 315, color="#2c6fb0", alpha=0.16, zorder=0)
+    ax.axhspan(340, 365, color="#b01a3a", alpha=0.16, zorder=0)
 
-    ax.set_xlabel("age (Ma)")
-    ax.set_ylabel("chain azimuth (°)")
+    # Compass hint on the left margin.
+    for deg, label in [(270, "W"), (300, "WNW"), (330, "NNW"), (360, "N")]:
+        ax.axhline(deg, color="#cccccc", lw=0.5, zorder=1)
+        ax.text(-1.2, deg, label, color="#888", fontsize=8, va="center", ha="right")
+
+    ax.text(8.0, 302, "Hawaiian = WNW ~ 300°\n(プレートが西微北へ動いた)",
+            color="#2c6fb0", fontsize=9.5, fontweight="bold")
+    ax.text(55.0, 352, "Emperor ~ N ~ 350°\n(プレートがほぼ北へ動いた)",
+            color="#b01a3a", fontsize=9.5, fontweight="bold", ha="left")
+
+    # "Direction jump" arrow.
+    ax.annotate(
+        "",
+        xy=(bend_age_Ma - 0.5, 350), xytext=(bend_age_Ma - 0.5, 305),
+        arrowprops={"arrowstyle": "-|>", "color": "#cc3344", "lw": 2.0},
+    )
+    ax.text(bend_age_Ma + 1.5, 325, "47 Ma に\n向きが急変\ndirection jumps",
+            color="#cc3344", fontsize=9.5, fontweight="bold",
+            ha="left", va="center")
+
+    ax.set_xlabel("年代 age (Ma)")
+    ax.set_ylabel("列の方位 chain azimuth (°)")
+    ax.set_title("鎖状火山列の方位角   Chain direction vs age",
+                 fontsize=10.5, pad=5)
     ax.set_xlim(-2, ages.max() * 1.04)
-    ax.set_ylim(265, 365)
+    ax.set_ylim(265, 370)
     ax.grid(True, color="#dddddd", lw=0.5)
 
+
+# ---------- speed (panel D) ------------------------------------------------
 
 def _draw_panel_speed(
     ax: plt.Axes,
@@ -353,35 +493,49 @@ def _draw_panel_speed(
     dists_km: np.ndarray,
     bend_age_Ma: float,
 ) -> None:
-    # Noisy raw derivative as a background trace.
     v_raw = apparent_speed_cm_per_yr(ages, dists_km)
-    ax.plot(ages, v_raw, color="#cccccc", lw=0.6, zorder=1)
+    ax.plot(ages, v_raw, color="#cccccc", lw=0.6, zorder=1,
+            label="raw derivative")
 
-    # Smoothed estimate via sliding-window OLS.
     v = _smoothed_speed_cm_per_yr(ages, dists_km, age_window_Myr=12.0)
-    ax.plot(ages, v, marker="o", ms=4, lw=1.4, color="#333", zorder=3)
+    ax.plot(ages, v, marker="o", ms=4, lw=1.6, color="#222", zorder=3,
+            label="12 Myr window")
 
-    ax.axhline(8.0, color="#999", ls="--", lw=0.8)
-    ax.text(ages.max() * 0.99, 8.1, "~8 cm/yr", color="#666",
-            va="bottom", ha="right", fontsize=9)
-    ax.axvline(bend_age_Ma, color="#888", ls=":", lw=1.0)
-    ax.text(bend_age_Ma + 0.8, 0.4, f"{bend_age_Ma:.0f} Ma",
-            color="#666", fontsize=9, va="bottom")
+    ax.axhspan(5, 11, color="#d6c94a", alpha=0.15, zorder=0)
+    ax.axhline(8.0, color="#a88b00", ls="--", lw=1.0, zorder=2)
+    ax.text(ages.max() * 0.99, 8.15, "~ 8 cm/yr (指の爪が伸びる速さ)",
+            color="#7a6a00", va="bottom", ha="right", fontsize=9)
 
-    ax.set_xlabel("age (Ma)")
-    ax.set_ylabel("apparent plate speed (cm/yr)")
+    ax.axvline(bend_age_Ma, color="#cc3344", ls="--", lw=1.2, alpha=0.7)
+
+    ax.annotate(
+        "方向は急変したが\n速さはほぼそのまま",
+        xy=(bend_age_Ma, 6.0),
+        xytext=(bend_age_Ma + 10, 12.4),
+        textcoords="data",
+        fontsize=10, color="#222", fontweight="bold",
+        ha="left", va="top",
+        arrowprops={"arrowstyle": "->", "color": "#888", "lw": 1.0},
+    )
+    ax.text(bend_age_Ma + 0.8, 0.3, f"{bend_age_Ma:.0f} Ma",
+            color="#cc3344", fontsize=9, va="bottom")
+
+    ax.set_xlabel("年代 age (Ma)")
+    ax.set_ylabel("見かけのプレート速度 speed (cm/yr)")
+    ax.set_title("プレート速度はどう変わったか   Apparent plate speed vs age",
+                 fontsize=10.5, pad=5)
     ax.set_xlim(-2, ages.max() * 1.04)
     ax.set_ylim(0, 14.0)
     ax.grid(True, color="#dddddd", lw=0.5)
+    ax.legend(loc="lower right", frameon=False, fontsize=8.5)
 
 
-# ---- helpers ---------------------------------------------------------------
-
+# ---------- helpers --------------------------------------------------------
 
 def _gc_sample(
     lat1: float, lon1: float, lat2: float, lon2: float, n: int = 40
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Sample a great-circle path between two endpoints (for drawing)."""
+    """Sample a great-circle path between two endpoints."""
     phi1, phi2 = np.deg2rad([lat1, lat2])
     lam1, lam2 = np.deg2rad([lon1, lon2])
     d = great_circle_distance_km(lat1, lon1, lat2, lon2) / 6371.0088
@@ -407,17 +561,12 @@ def _anchor_offset(anchor: Literal["tl", "tr", "bl", "br"]) -> tuple[int, int, s
     }[anchor]
 
 
-def _panel_tag(ax: plt.Axes, letter: str, loc: str = "tl") -> None:
-    x, y, ha, va = {
-        "tl": (0.015, 0.965, "left", "top"),
-        "tr": (0.985, 0.965, "right", "top"),
-        "bl": (0.015, 0.035, "left", "bottom"),
-        "br": (0.985, 0.035, "right", "bottom"),
-    }[loc]
+def _panel_tag(ax: plt.Axes, letter: str) -> None:
     ax.text(
-        x, y, letter,
+        0.012, 0.972, letter,
         transform=ax.transAxes,
-        fontsize=14, fontweight="bold", color="#222",
-        ha=ha, va=va,
-        bbox={"facecolor": "white", "edgecolor": "none", "pad": 2.5, "alpha": 0.85},
+        fontsize=15, fontweight="bold", color="#111",
+        ha="left", va="top",
+        bbox={"facecolor": "white", "edgecolor": "#888888",
+              "pad": 3.2, "linewidth": 0.7, "alpha": 0.95},
     )
