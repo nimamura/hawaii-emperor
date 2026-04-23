@@ -5,10 +5,13 @@ import numpy as np
 import pytest
 
 from src.geometry import (
+    BEND_LAT,
+    BEND_LON,
     KILAUEA_LAT,
     KILAUEA_LON,
     apparent_speed_cm_per_yr,
     chain_azimuth_deg,
+    chain_distance_via_bend_km,
     fit_broken_stick,
     great_circle_distance_km,
 )
@@ -75,6 +78,50 @@ def test_emperor_chain_points_approximately_north():
     # Daikakuji (32N, ~172E) to Suiko (44.6N, ~170E): azimuth near 350–010°.
     az = chain_azimuth_deg(32.0, 172.0, 44.58, 170.33)
     assert az > 340.0 or az < 20.0
+
+
+# ---------- chain_distance_via_bend_km --------------------------------------
+
+
+def test_chain_distance_hawaiian_matches_direct_great_circle():
+    # For post-bend seamounts the chain is a near-great-circle from Kilauea,
+    # so chain distance should equal radial distance.
+    lat, lon = 28.20, 182.63  # Midway
+    direct = great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, lat, lon)
+    via = chain_distance_via_bend_km(lat, lon, chain="Hawaiian")
+    assert via == pytest.approx(direct, rel=1e-12)
+
+
+def test_chain_distance_emperor_is_sum_of_two_legs():
+    lat, lon = 53.40, 164.40  # Meiji
+    leg1 = great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, BEND_LAT, BEND_LON)
+    leg2 = great_circle_distance_km(BEND_LAT, BEND_LON, lat, lon)
+    via = chain_distance_via_bend_km(lat, lon, chain="Emperor")
+    assert via == pytest.approx(leg1 + leg2, rel=1e-12)
+    # Sanity: chain distance for Meiji should be larger than the direct
+    # great-circle distance from Kilauea, because the chain bends.
+    assert via > great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, lat, lon)
+
+
+def test_chain_distance_bend_zone_uses_direct_distance():
+    # "Bend" seamounts sit right at the kink; treat them as the Hawaiian side.
+    lat, lon = 32.08, 172.30
+    direct = great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, lat, lon)
+    via = chain_distance_via_bend_km(lat, lon, chain="Bend")
+    assert via == pytest.approx(direct, rel=1e-12)
+
+
+def test_chain_distance_is_vectorised():
+    lats = np.array([28.20, 35.26, 53.40])
+    lons = np.array([182.63, 171.59, 164.40])
+    chains = np.array(["Hawaiian", "Bend", "Emperor"])
+    out = chain_distance_via_bend_km(lats, lons, chain=chains)
+    assert out.shape == lats.shape
+    # Each element should match the scalar implementation.
+    expected = np.array(
+        [chain_distance_via_bend_km(la, lo, chain=c) for la, lo, c in zip(lats, lons, chains)]
+    )
+    np.testing.assert_allclose(out, expected, rtol=1e-12)
 
 
 # ---------- fit_broken_stick -------------------------------------------------
