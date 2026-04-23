@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.DS_Store
+
+# Cached / working data. Force-add specific CSVs we want versioned.
+data/**
+!data/.gitkeep
+!data/seamount_ages.csv
+
+# Generated figures. Force-add final PNGs with `git add -f outputs/<name>.png`.
+outputs/**
+!outputs/.gitkeep
