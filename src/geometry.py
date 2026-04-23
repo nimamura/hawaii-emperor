@@ -22,6 +22,12 @@ EARTH_RADIUS_KM: float = 6371.0088
 KILAUEA_LAT: float = 19.4069
 KILAUEA_LON: float = 204.7104  # = -155.2896E in [0, 360).
 
+# Daikakuji Seamount, the classical "bend" marker in the Hawaii–Emperor chain.
+# O'Connor et al. (2013) place the morphological bend within a handful of
+# seamounts around 32°N, 172.3°E.
+BEND_LAT: float = 32.08
+BEND_LON: float = 172.30
+
 
 def _to_rad(x: float | np.ndarray) -> np.ndarray:
     return np.deg2rad(np.asarray(x, dtype=float))
@@ -57,6 +63,38 @@ def chain_azimuth_deg(
     y = np.cos(phi1) * np.sin(phi2) - np.sin(phi1) * np.cos(phi2) * np.cos(dlam)
     az = np.rad2deg(np.arctan2(x, y))
     return np.mod(az, 360.0)
+
+
+def chain_distance_via_bend_km(
+    lat: float | np.ndarray,
+    lon: float | np.ndarray,
+    *,
+    chain: str | np.ndarray,
+) -> float | np.ndarray:
+    """Along-chain distance from Kilauea (km), routed via Daikakuji for Emperor.
+
+    For Hawaiian and Bend seamounts (age ≲ 48 Ma) the chain is well
+    approximated by a great circle, so direct ``great_circle_distance_km``
+    from Kilauea is correct. Emperor seamounts sit on the other limb of the
+    ~60° bend, so we use ``dist(Kilauea, bend) + dist(bend, seamount)`` which
+    is the classical "along-chain" measure plotted in Morgan 1971 and
+    O'Connor 2013 against age.
+    """
+    lat_arr = np.asarray(lat, dtype=float)
+    lon_arr = np.asarray(lon, dtype=float)
+    chain_arr = np.asarray(chain)
+
+    direct = great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, lat_arr, lon_arr)
+    leg1 = great_circle_distance_km(KILAUEA_LAT, KILAUEA_LON, BEND_LAT, BEND_LON)
+    leg2 = great_circle_distance_km(BEND_LAT, BEND_LON, lat_arr, lon_arr)
+    via = leg1 + leg2
+
+    is_emperor = chain_arr == "Emperor"
+    out = np.where(is_emperor, via, direct)
+    # Preserve scalar return for scalar input.
+    if out.ndim == 0:
+        return float(out)
+    return out
 
 
 @dataclass(frozen=True)
