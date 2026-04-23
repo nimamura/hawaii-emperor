@@ -37,13 +37,12 @@ from src.geometry import (
     great_circle_distance_km,
 )
 
-# Labels to annotate in the map panel.
+# Labels to annotate in the map panel. (name, corner of label relative to point).
 MAP_LABELS: list[tuple[str, str]] = [
-    ("Kilauea", "br"),
+    ("Kilauea", "tr"),
     ("Midway", "tr"),
-    ("Daikakuji", "br"),
-    ("Suiko South", "tl"),
-    ("Meiji", "tl"),
+    ("Suiko South", "tr"),
+    ("Meiji", "tr"),
 ]
 
 # Approximate Pacific-rim coastline polyline (sparse, hand-traced) for
@@ -64,17 +63,12 @@ _RIM = np.array(
 
 
 def _draw_pacific_rim(ax: plt.Axes) -> None:
-    ax.plot(_RIM[:, 0], _RIM[:, 1], color="#888888", lw=0.9, zorder=1)
-    # Hatched land on the NW corner for context.
-    ax.fill_between(
-        _RIM[:, 0],
-        _RIM[:, 1],
-        60.5,
-        color="#f2efe9",
-        edgecolor="#bbb5a9",
-        linewidth=0.6,
-        zorder=0,
-    )
+    # Close the polygon into the top-left so the land fill sits cleanly in
+    # the NW corner of the map without bleeding into the open ocean.
+    poly_lon = np.concatenate([_RIM[:, 0], [_RIM[-1, 0], _RIM[0, 0]]])
+    poly_lat = np.concatenate([_RIM[:, 1], [65.0, 65.0]])
+    ax.fill(poly_lon, poly_lat, color="#f1ede2", edgecolor="#b7b0a0",
+            linewidth=0.7, zorder=1)
 
 
 def _fit_segment(ages: np.ndarray, dists: np.ndarray) -> tuple[float, float]:
@@ -91,20 +85,58 @@ def _running_azimuth(
     ages_Ma: np.ndarray,
     lats: np.ndarray,
     lons: np.ndarray,
-    window: int = 4,
+    age_window_Myr: float = 10.0,
 ) -> np.ndarray:
-    """Bearing between seamounts ``i-window//2`` and ``i+window//2`` in the
-    age-sorted sequence. Endpoints use shrinking asymmetric windows."""
+    """Bearing averaged over seamounts within ±``age_window_Myr`` of each point.
+
+    Using an age-window (rather than a fixed index window) keeps the
+    azimuth estimate stable in the densely-sampled young end of the chain
+    where many Big-Island-scale points sit at almost identical ages.
+    """
     n = ages_Ma.size
-    half = max(window // 2, 1)
     az = np.full(n, np.nan)
     for i in range(n):
-        lo = max(0, i - half)
-        hi = min(n - 1, i + half)
+        lo_mask = ages_Ma <= ages_Ma[i] - age_window_Myr / 2
+        hi_mask = ages_Ma >= ages_Ma[i] + age_window_Myr / 2
+        lo_idx = np.where(lo_mask)[0]
+        hi_idx = np.where(hi_mask)[0]
+        lo = lo_idx[-1] if lo_idx.size else max(0, i - 2)
+        hi = hi_idx[0] if hi_idx.size else min(n - 1, i + 2)
         if hi <= lo:
             continue
         az[i] = chain_azimuth_deg(lats[lo], lons[lo], lats[hi], lons[hi])
     return az
+
+
+def _smoothed_speed_cm_per_yr(
+    ages_Ma: np.ndarray,
+    dists_km: np.ndarray,
+    age_window_Myr: float = 10.0,
+) -> np.ndarray:
+    """Apparent speed from a sliding-window linear fit of dist vs age.
+
+    The direct numerical derivative in ``apparent_speed_cm_per_yr`` is
+    dominated by tiny age gaps between volcanoes on the same island (e.g.
+    Kilauea/Mauna Loa/Hualalai). Fitting a line in a ±5 Myr window averages
+    that scatter out.
+    """
+    n = ages_Ma.size
+    out = np.full(n, np.nan)
+    for i in range(n):
+        mask = np.abs(ages_Ma - ages_Ma[i]) <= age_window_Myr / 2
+        if mask.sum() < 3:
+            # Fall back to nearest-neighbours when the window is sparse.
+            k = 3
+            lo = max(0, i - k)
+            hi = min(n, i + k + 1)
+            mask = np.zeros(n, dtype=bool)
+            mask[lo:hi] = True
+        x = ages_Ma[mask]
+        y = dists_km[mask]
+        A = np.column_stack([np.ones_like(x), x])
+        (a, s), *_ = np.linalg.lstsq(A, y, rcond=None)
+        out[i] = abs(float(s)) * 0.1  # km/Myr → cm/yr
+    return out
 
 
 def plot_hawaii_emperor_figure(
@@ -112,7 +144,9 @@ def plot_hawaii_emperor_figure(
     *,
     bend_age_Ma: float = 47.0,
     cmap: str = "plasma",
-    title: str | None = "Hawaii–Emperor Bend: the 47 Ma kink in a 6000 km plume track",
+    title: str | None = (
+        "Hawaii–Emperor Bend — the 47 Ma kink in a 6000 km hotspot track"
+    ),
 ) -> plt.Figure:
     """Build the 2×2 figure. ``df`` must follow ``src.catalog`` schema."""
     required = {"name", "chain", "lon", "lat", "age_Ma", "age_err_Ma"}
@@ -209,13 +243,14 @@ def _draw_panel_map(
         marker="*", ms=16, color="#cc3344", mec="white", mew=1.0, zorder=4,
     )
     ax.annotate(
-        "47 Ma bend",
+        "47 Ma bend (Daikakuji)",
         xy=(BEND_LON, BEND_LAT),
-        xytext=(8, -18),
+        xytext=(-10, -20),
         textcoords="offset points",
         fontsize=10,
         color="#cc3344",
         fontweight="bold",
+        ha="right",
     )
 
     # A handful of named seamounts.
@@ -292,21 +327,23 @@ def _draw_panel_azimuth(
     lons: np.ndarray,
     bend_age_Ma: float,
 ) -> None:
-    az = _running_azimuth(ages, lats, lons, window=4)
-    ax.plot(ages, az, marker="o", ms=4, lw=1.0, color="#444")
+    az = _running_azimuth(ages, lats, lons, age_window_Myr=12.0)
+    ax.plot(ages, az, marker="o", ms=4, lw=1.2, color="#333")
 
     ax.axvline(bend_age_Ma, color="#888", ls=":", lw=1.0)
-    ax.axhspan(280, 310, color="#2c6fb0", alpha=0.12, zorder=0)
-    ax.axhspan(340, 360, color="#b01a3a", alpha=0.12, zorder=0)
-    ax.axhspan(0, 20, color="#b01a3a", alpha=0.12, zorder=0)
+    ax.axhspan(285, 310, color="#2c6fb0", alpha=0.14, zorder=0)
+    ax.axhspan(340, 360, color="#b01a3a", alpha=0.14, zorder=0)
 
-    ax.text(15.0, 295, "Hawaiian: WNW (~300°)", color="#2c6fb0", fontsize=9)
-    ax.text(65.0, 355, "Emperor: ~N (~350°)", color="#b01a3a", fontsize=9, ha="center")
+    ax.text(5.0, 303, "Hawaiian chain\nWNW (~300°)", color="#2c6fb0", fontsize=9)
+    ax.text(70.0, 353, "Emperor chain\n~N (~350°)", color="#b01a3a",
+            fontsize=9, ha="center")
+    ax.text(bend_age_Ma + 0.8, 270, f"{bend_age_Ma:.0f} Ma",
+            color="#666", fontsize=9, va="bottom")
 
     ax.set_xlabel("age (Ma)")
     ax.set_ylabel("chain azimuth (°)")
     ax.set_xlim(-2, ages.max() * 1.04)
-    ax.set_ylim(260, 365)
+    ax.set_ylim(265, 365)
     ax.grid(True, color="#dddddd", lw=0.5)
 
 
@@ -316,16 +353,25 @@ def _draw_panel_speed(
     dists_km: np.ndarray,
     bend_age_Ma: float,
 ) -> None:
-    v = apparent_speed_cm_per_yr(ages, dists_km)
-    ax.plot(ages, v, marker="o", ms=4, lw=1.0, color="#444")
+    # Noisy raw derivative as a background trace.
+    v_raw = apparent_speed_cm_per_yr(ages, dists_km)
+    ax.plot(ages, v_raw, color="#cccccc", lw=0.6, zorder=1)
+
+    # Smoothed estimate via sliding-window OLS.
+    v = _smoothed_speed_cm_per_yr(ages, dists_km, age_window_Myr=12.0)
+    ax.plot(ages, v, marker="o", ms=4, lw=1.4, color="#333", zorder=3)
+
     ax.axhline(8.0, color="#999", ls="--", lw=0.8)
-    ax.text(ages.max() * 0.99, 8.0, " 8 cm/yr", color="#666", va="bottom", ha="right", fontsize=9)
+    ax.text(ages.max() * 0.99, 8.1, "~8 cm/yr", color="#666",
+            va="bottom", ha="right", fontsize=9)
     ax.axvline(bend_age_Ma, color="#888", ls=":", lw=1.0)
+    ax.text(bend_age_Ma + 0.8, 0.4, f"{bend_age_Ma:.0f} Ma",
+            color="#666", fontsize=9, va="bottom")
 
     ax.set_xlabel("age (Ma)")
     ax.set_ylabel("apparent plate speed (cm/yr)")
     ax.set_xlim(-2, ages.max() * 1.04)
-    ax.set_ylim(0, max(15.0, float(np.nanmax(v)) * 1.1))
+    ax.set_ylim(0, 14.0)
     ax.grid(True, color="#dddddd", lw=0.5)
 
 
